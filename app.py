@@ -14,7 +14,7 @@ app = Flask(__name__)
 # A blank key must lock the API down, never fall back to a guessable default.
 API_KEY = os.environ.get("API_KEY", "").strip()
 YTDLP_TIMEOUT = int(os.environ.get("YTDLP_TIMEOUT", "90"))
-REV = "3"
+REV = "4"
 
 
 def _ytdlp_version():
@@ -132,6 +132,8 @@ _BLOCKED_MARKERS = (
     "Sign in to confirm",
     "Requested format is not available",
     "No video formats found",
+    # rc=0 but the format list is storyboard-only — a blocked player API response
+    "Only images are available",
 )
 
 
@@ -139,27 +141,33 @@ def _looks_blocked(stderr):
     return any(marker in stderr for marker in _BLOCKED_MARKERS)
 
 
+def _is_good(result):
+    return result.returncode == 0 and not _looks_blocked(result.stderr)
+
+
 def _run_extract(args):
     started = time.monotonic()
-    result = _run(args, EXTRACTOR_ARGS)
-    if result.returncode == 0 or not _looks_blocked(result.stderr):
-        return result
+    best = _run(args, EXTRACTOR_ARGS)
+    if _is_good(best):
+        return best
     for client in _RETRY_CLIENTS:
         remaining = _RETRY_BUDGET - (time.monotonic() - started)
         if remaining < 15:
             break
         try:
-            retry = _run(
+            attempt = _run(
                 args,
                 f"youtube:player_client={client}",
                 timeout=min(YTDLP_TIMEOUT, int(remaining)),
             )
         except subprocess.TimeoutExpired:
             break
-        if retry.returncode == 0 or not _looks_blocked(retry.stderr):
-            return retry
-        result = retry
-    return result
+        if _is_good(attempt):
+            return attempt
+        # a degraded success (metadata only) beats a hard failure as fallback
+        if best.returncode != 0 and attempt.returncode == 0:
+            best = attempt
+    return best
 
 
 @app.route("/health", methods=["GET"])
