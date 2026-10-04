@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 from urllib.parse import urlsplit
 
 from flask import Flask, jsonify, request
@@ -13,7 +14,7 @@ app = Flask(__name__)
 # A blank key must lock the API down, never fall back to a guessable default.
 API_KEY = os.environ.get("API_KEY", "").strip()
 YTDLP_TIMEOUT = int(os.environ.get("YTDLP_TIMEOUT", "90"))
-REV = "2"
+REV = "3"
 
 
 def _ytdlp_version():
@@ -68,7 +69,6 @@ def _cookies_args():
 
 _COOKIES_ARGS = _cookies_args()
 COOKIES_ENABLED = bool(_COOKIES_ARGS)
-YTDLP_BASE = ["yt-dlp", "--extractor-args", EXTRACTOR_ARGS, *_COOKIES_ARGS]
 
 if not API_KEY:
     app.logger.warning(
@@ -110,13 +110,56 @@ def _parse_url_request():
     return url, None
 
 
-def _run(args):
+def _run(args, extractor_args=None, timeout=None):
+    cmd = ["yt-dlp"]
+    if extractor_args is not None:
+        cmd += ["--extractor-args", extractor_args]
+    cmd += [*_COOKIES_ARGS, *args]
     return subprocess.run(
-        YTDLP_BASE + args,
+        cmd,
         capture_output=True,
         text=True,
-        timeout=YTDLP_TIMEOUT,
+        timeout=timeout or YTDLP_TIMEOUT,
     )
+
+
+# YouTube intermittently bot-checks datacenter IPs; a different player client often gets
+# through where "default,web" was refused, so retry across clients before giving up.
+_RETRY_CLIENTS = ("tv", "android_vr", "web_embedded")
+_RETRY_BUDGET = 100  # total seconds across all attempts
+_BLOCKED_MARKERS = (
+    "403",
+    "Sign in to confirm",
+    "Requested format is not available",
+    "No video formats found",
+)
+
+
+def _looks_blocked(stderr):
+    return any(marker in stderr for marker in _BLOCKED_MARKERS)
+
+
+def _run_extract(args):
+    started = time.monotonic()
+    result = _run(args, EXTRACTOR_ARGS)
+    if result.returncode == 0 or not _looks_blocked(result.stderr):
+        return result
+    for client in _RETRY_CLIENTS:
+        remaining = _RETRY_BUDGET - (time.monotonic() - started)
+        if remaining < 15:
+            break
+        try:
+            retry = _run(
+                args,
+                f"youtube:player_client={client}",
+                timeout=min(YTDLP_TIMEOUT, int(remaining)),
+            )
+        except subprocess.TimeoutExpired:
+            break
+        if retry.returncode == 0 or not _looks_blocked(retry.stderr):
+            return retry
+        result = retry
+    return result
 
 
 @app.route("/health", methods=["GET"])
@@ -141,7 +184,7 @@ def get_info():
         return error
 
     try:
-        result = _run(["--dump-json", "--no-playlist", url])
+        result = _run_extract(["--dump-json", "--no-playlist", url])
         if result.returncode != 0:
             return jsonify({"error": _tail(result.stderr)}), 500
 
@@ -191,7 +234,7 @@ def get_download_url():
     fmt = request.args.get("format", "bestvideo+bestaudio/best").strip() or "bestvideo+bestaudio/best"
 
     try:
-        result = _run(["-f", fmt, "--get-url", url])
+        result = _run_extract(["-f", fmt, "--get-url", url])
         if result.returncode != 0:
             return jsonify({"error": _tail(result.stderr)}), 500
 
@@ -218,7 +261,7 @@ def get_audio_url():
         return error
 
     try:
-        result = _run(["-f", "bestaudio", "--get-url", url])
+        result = _run_extract(["-f", "bestaudio", "--get-url", url])
         if result.returncode != 0:
             return jsonify({"error": _tail(result.stderr)}), 500
 
@@ -239,7 +282,7 @@ def get_subtitles():
         return error
 
     try:
-        result = _run(["--list-subs", "--skip-download", url])
+        result = _run_extract(["--list-subs", "--skip-download", url])
         if result.returncode != 0:
             return jsonify({"error": _tail(result.stderr)}), 500
         return jsonify({"output": result.stdout.strip()})

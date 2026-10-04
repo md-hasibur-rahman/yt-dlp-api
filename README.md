@@ -10,6 +10,10 @@ URLs over HTTP — usable from the portfolio dashboard, n8n, Make, Zapier, or an
   extractions fail with "Signature solving failed / Only images are available".
 - **`/health` reports `rev` and the installed `yt-dlp` version**, so you can confirm what a
   deploy is running and how fresh yt-dlp is.
+- **Bot-check retry across player clients.** When YouTube refuses the default client (403 /
+  "Requested format is not available"), the request is retried with alternative player
+  clients (`tv`, `android_vr`, `web_embedded`) before failing — datacenter IPs get
+  bot-checked intermittently, and a different client often gets through.
 - **Cookies are optional now.** The old build always passed `--cookies /app/cookies.txt`, but
   that file is not in the repo, so on Render every yt-dlp call failed. Cookies are only
   attached when a file actually exists (see `COOKIES_B64` below).
