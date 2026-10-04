@@ -5,6 +5,11 @@ URLs over HTTP — usable from the portfolio dashboard, n8n, Make, Zapier, or an
 
 ## What changed in this revision
 
+- **Deno is installed in the image.** YouTube now requires yt-dlp's EJS challenge solver,
+  which needs Deno >= 2.3 on `PATH` (the Debian `nodejs` package is far too old). Without it,
+  extractions fail with "Signature solving failed / Only images are available".
+- **`/health` reports `rev` and the installed `yt-dlp` version**, so you can confirm what a
+  deploy is running and how fresh yt-dlp is.
 - **Cookies are optional now.** The old build always passed `--cookies /app/cookies.txt`, but
   that file is not in the repo, so on Render every yt-dlp call failed. Cookies are only
   attached when a file actually exists (see `COOKIES_B64` below).
@@ -75,8 +80,11 @@ X-API-Key: your-secret-key
 ### `GET /health`
 
 ```json
-{ "status": "ok", "cookies": true }
+{ "status": "ok", "cookies": true, "rev": "2", "ytdlp": "2025.x.x" }
 ```
+
+`cookies` shows whether a cookie file is active, `ytdlp` shows the installed yt-dlp
+version (rebuild the service to refresh it), and `rev` identifies the app revision.
 
 ### `GET /info?url=VIDEO_URL`
 

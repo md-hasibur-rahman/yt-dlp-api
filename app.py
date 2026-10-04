@@ -13,6 +13,19 @@ app = Flask(__name__)
 # A blank key must lock the API down, never fall back to a guessable default.
 API_KEY = os.environ.get("API_KEY", "").strip()
 YTDLP_TIMEOUT = int(os.environ.get("YTDLP_TIMEOUT", "90"))
+REV = "2"
+
+
+def _ytdlp_version():
+    try:
+        return subprocess.run(
+            ["yt-dlp", "--version"], capture_output=True, text=True, timeout=15
+        ).stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+YTDLP_VERSION = _ytdlp_version()
 EXTRACTOR_ARGS = os.environ.get(
     "YTDLP_EXTRACTOR_ARGS", "youtube:player_client=default,web"
 )
@@ -108,7 +121,14 @@ def _run(args):
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "cookies": COOKIES_ENABLED})
+    return jsonify(
+        {
+            "status": "ok",
+            "cookies": COOKIES_ENABLED,
+            "rev": REV,
+            "ytdlp": YTDLP_VERSION,
+        }
+    )
 
 
 @app.route("/info", methods=["GET"])
