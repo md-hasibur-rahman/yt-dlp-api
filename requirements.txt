@@ -1,2 +1,5 @@
 flask==3.1.0
-yt-dlp
+gunicorn>=21.2.0
+# Kept on the [default] extra and unpinned-on-purpose: YouTube breaks older yt-dlp builds,
+# so each deploy should pull the latest release with its recommended dependencies.
+yt-dlp[default]>=2025.1.15

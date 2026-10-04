@@ -1,123 +1,126 @@
-# yt-dlp API — Self-hosted on Render
+# yt-dlp API — self-hosted on Render
 
-A lightweight Flask API that wraps `yt-dlp` so you can extract video info and direct download URLs via HTTP requests — perfect for use with n8n, Make, Zapier, or any HTTP client.
+A small Flask API wrapping `yt-dlp` so you can fetch video metadata and direct download
+URLs over HTTP — usable from the portfolio dashboard, n8n, Make, Zapier, or any HTTP client.
 
----
+## What changed in this revision
+
+- **Cookies are optional now.** The old build always passed `--cookies /app/cookies.txt`, but
+  that file is not in the repo, so on Render every yt-dlp call failed. Cookies are only
+  attached when a file actually exists (see `COOKIES_B64` below).
+- **No `changeme` fallback.** If `API_KEY` is unset, every request is rejected (401) instead
+  of falling back to a guessable key. Comparison uses `hmac.compare_digest`.
+- **gunicorn** serves the app (with a 120s worker timeout, longer than the 90s yt-dlp
+  subprocess timeout) instead of the Flask dev server.
+- **URL validation**: `?url=` must be a public http(s) URL — localhost / private ranges are
+  rejected.
+- Removed the stray empty `X-Youtube-Identity-Token` header the old build sent.
 
 ## Deploy to Render
 
-### 1. Push to GitHub
-```bash
-git init
-git add .
-git commit -m "init"
-git remote add origin https://github.com/YOUR_USERNAME/yt-dlp-api.git
-git push -u origin main
-```
+### Option A — Blueprint (uses `render.yaml`)
 
-### 2. Create a Render Web Service
-1. Go to [render.com](https://render.com) and click **New → Web Service**
-2. Connect your GitHub repo
-3. Set **Environment** to **Docker**
-4. Add environment variable:
-   - `API_KEY` = `some-secret-key-you-choose`
-5. Click **Deploy**
+1. Push this repo to GitHub (it already lives at `md-hasibur-rahman/yt-dlp-api`).
+2. On [render.com](https://render.com): **New → Blueprint** → pick this repo → **Apply**.
+3. Render creates the web service, auto-generates `API_KEY`, and health-checks `/health`.
+4. Open the service → **Environment** → copy the `API_KEY` value (you need it in the
+   dashboard tool or any client).
 
-Your service URL will be: `https://your-app-name.onrender.com`
+### Option B — Manual web service
 
----
+1. **New → Web Service** → connect this repo.
+2. Language/Environment: **Docker** (Dockerfile is in the repo root).
+3. Region: Singapore (or nearest), Plan: Free.
+4. Environment variables: `API_KEY` = any long random string (Render can generate one).
+5. **Deploy**. Your base URL will be `https://<service-name>.onrender.com`.
 
-## API Endpoints
+### Optional: cookies (raises YouTube success rate)
 
-All endpoints (except `/health`) require the header:
+Datacenter IPs (Render included) get hit by YouTube bot checks more often. Attaching your
+own browser cookies helps. Cookies must **never** be committed to the repo:
+
+1. Export cookies for `youtube.com` in Netscape format (e.g. with the “Get cookies.txt
+   LOCALLY” browser extension), while signed in to your own account.
+2. Base64-encode the file:
+   ```bash
+   base64 -w0 cookies.txt > cookies.b64
+   ```
+3. In Render → your service → **Environment**, add:
+   - `COOKIES_B64` = the contents of `cookies.b64` (mark it as a secret)
+4. Redeploy. `/health` reports `{"status":"ok","cookies":true}` so you can confirm.
+
+Notes: cookies expire after a few weeks — refresh `COOKIES_B64` when extraction starts
+failing again. If you run the container elsewhere, you can instead mount a file and set
+`COOKIES_FILE=/path/to/cookies.txt`.
+
+### Other env vars (all optional)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `API_KEY` | *(empty — API locked)* | Required. Sent by clients as `X-API-Key`. |
+| `COOKIES_B64` | *(unset)* | Base64 Netscape cookies, written to `/tmp` at startup. |
+| `COOKIES_FILE` | `/app/cookies.txt` | Path to a mounted cookie file (used if it exists). |
+| `YTDLP_EXTRACTOR_ARGS` | `youtube:player_client=default,web` | Tune if YouTube changes clients. |
+| `YTDLP_TIMEOUT` | `90` | Seconds before a yt-dlp subprocess is killed. |
+| `PORT` | `5000` | Render sets this; the server binds to it. |
+
+## API endpoints
+
+All endpoints except `/health` require the header:
+
 ```
 X-API-Key: your-secret-key
 ```
 
 ### `GET /health`
-Check if the service is running.
-```
-GET /health
-→ { "status": "ok" }
-```
 
----
+```json
+{ "status": "ok", "cookies": true }
+```
 
 ### `GET /info?url=VIDEO_URL`
-Returns metadata about the video.
-```
-GET /info?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ
 
-→ {
-    "title": "...",
-    "duration": 212,
-    "duration_string": "3:32",
-    "thumbnail": "https://...",
-    "uploader": "Rick Astley",
-    "view_count": 1400000000,
-    "upload_date": "20091025",
-    "formats": [ { "format_id": "...", "ext": "mp4", ... } ]
-  }
-```
-
----
+Metadata for one video (`--dump-json --no-playlist`): `title`, `duration`,
+`duration_string`, `thumbnail`, `uploader`, `uploader_url`, `view_count`, `like_count`,
+`description`, `upload_date`, `webpage_url`, `extractor`, and a `formats` array with
+`format_id`, `format_note`, `ext`, `resolution`, `filesize`.
 
 ### `GET /download-url?url=VIDEO_URL&format=FORMAT`
-Returns the direct CDN download URL (no file is downloaded to the server).
 
-- `format` (optional): yt-dlp format string. Default: `bestvideo+bestaudio/best`
+Direct CDN URL(s); nothing is downloaded to the server.
 
-```
-GET /download-url?url=https://youtu.be/dQw4w9WgXcQ&format=bestaudio
-
-→ { "download_url": "https://rr3---sn-....googlevideo.com/...", "format": "bestaudio" }
-```
-
----
+- `format` (optional): any yt-dlp format string. Default `bestvideo+bestaudio/best`.
+- When the format matches separate video + audio streams, `download_url` is a **list**
+  (video URL first, audio URL second) — download both and merge with ffmpeg, or ask for a
+  single combined stream like `best` / `best[ext=mp4]`.
 
 ### `GET /audio-url?url=VIDEO_URL`
-Shortcut — returns best audio-only direct URL.
-```
-GET /audio-url?url=https://youtu.be/dQw4w9WgXcQ
 
-→ { "audio_url": "https://..." }
-```
-
----
+`{ "audio_url": "https://..." }` — shortcut for `bestaudio`.
 
 ### `GET /subtitles?url=VIDEO_URL`
-Lists available subtitle/caption languages.
+
+`{ "output": "<yt-dlp --list-subs output>" }`.
+
+## Quick test
+
+```bash
+BASE=https://your-service.onrender.com
+KEY=your-api-key
+
+curl -s $BASE/health
+curl -s -H "X-API-Key: $KEY" "$BASE/info?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+curl -s -H "X-API-Key: $KEY" "$BASE/audio-url?url=https://youtu.be/dQw4w9WgXcQ"
 ```
-GET /subtitles?url=https://youtu.be/dQw4w9WgXcQ
-
-→ { "output": "Available subtitles for dQw4w9WgXcQ:\nLanguage  Name\nen        English\n..." }
-```
-
----
-
-## Using in n8n
-
-Add an **HTTP Request** node with these settings:
-
-| Field | Value |
-|---|---|
-| Method | GET |
-| URL | `https://your-app.onrender.com/info` |
-| Query Params | `url` = `{{ $json.videoUrl }}` |
-| Headers | `X-API-Key` = `your-secret-key` |
-| Response Format | JSON |
-
-### Example n8n Workflow
-1. **Trigger** (Webhook / Schedule / etc.)
-2. **HTTP Request** → `/info` to get video metadata
-3. **HTTP Request** → `/audio-url` to get the direct audio link
-4. **Do whatever** — send to Telegram, save to Notion, pass to another tool, etc.
-
----
 
 ## Notes
 
-- **Free Render tier**: Instances sleep after 15 min inactivity. First request after sleep takes ~30s. Upgrade to Starter ($7/mo) to keep it always-on.
-- **No file storage**: This API only returns URLs and metadata. Files are not downloaded to the server.
-- **yt-dlp updates**: YouTube frequently changes their API. The Docker image installs the latest yt-dlp on each build. Redeploy periodically to stay updated.
-- **Rate limits**: Render free tier has limited CPU. Don't fire too many concurrent requests.
+- **Free tier sleeps after ~15 min idle** — the first request after a sleep can take ~30–60s
+  while the container starts. The portfolio dashboard tool shows a friendly “waking the
+  server” hint on timeouts.
+- **No file storage** — the API only returns URLs and metadata.
+- **yt-dlp freshness matters** — YouTube changes frequently; redeploy periodically (the
+  Docker build installs the latest yt-dlp) and keep `yt-dlp>=2025.1.15` or newer.
+- **Security** — this API can fetch any public URL on your behalf; keep `API_KEY` private.
+  A blank key locks every endpoint. Cookies/`COOKIES_B64` are login credentials: treat them
+  like passwords and never commit them.

@@ -1,0 +1,9 @@
+# Never bake secrets or local junk into the image.
+cookies.txt
+.env
+.git
+.gitignore
+__pycache__/
+*.pyc
+.venv/
+venv/

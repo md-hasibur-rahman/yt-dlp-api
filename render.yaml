@@ -3,6 +3,8 @@ services:
     name: yt-dlp-api
     runtime: docker
     dockerfilePath: ./Dockerfile
+    region: singapore
+    plan: free
     envVars:
       - key: API_KEY
         generateValue: true   # Render auto-generates a random secret
