@@ -14,7 +14,7 @@ app = Flask(__name__)
 # A blank key must lock the API down, never fall back to a guessable default.
 API_KEY = os.environ.get("API_KEY", "").strip()
 YTDLP_TIMEOUT = int(os.environ.get("YTDLP_TIMEOUT", "90"))
-REV = "4"
+REV = "5"
 
 
 def _ytdlp_version():
@@ -125,7 +125,7 @@ def _run(args, extractor_args=None, timeout=None):
 
 # YouTube intermittently bot-checks datacenter IPs; a different player client often gets
 # through where "default,web" was refused, so retry across clients before giving up.
-_RETRY_CLIENTS = ("tv", "android_vr", "web_embedded")
+_RETRY_CLIENTS = ("tv", "android_vr", "web_embedded", "tv_simply", "mweb", "ios")
 _RETRY_BUDGET = 100  # total seconds across all attempts
 _BLOCKED_MARKERS = (
     "403",
@@ -143,6 +143,24 @@ def _looks_blocked(stderr):
 
 def _is_good(result):
     return result.returncode == 0 and not _looks_blocked(result.stderr)
+
+
+# A hard failure that looks like a sign-in/bot check gets a human explanation; other
+# failures keep yt-dlp's own stderr tail so real errors stay debuggable.
+_BOTCHECK_MARKERS = ("Sign in to confirm", "HTTP Error 403")
+
+_BOTCHECK_MESSAGE = (
+    "YouTube is asking this server to sign in (bot check or age restriction) and refused "
+    "every player client for this video. Retrying later may clear it; the reliable fix is "
+    "setting COOKIES_B64 on the service — see its README."
+)
+
+
+def _error_message(result):
+    stderr = result.stderr or ""
+    if any(marker in stderr for marker in _BOTCHECK_MARKERS):
+        return _BOTCHECK_MESSAGE
+    return _tail(stderr)
 
 
 def _run_extract(args):
@@ -192,9 +210,13 @@ def get_info():
         return error
 
     try:
-        result = _run_extract(["--dump-json", "--no-playlist", url])
+        # --ignore-no-formats-error keeps a bot-checked video from hard-failing metadata:
+        # the title/thumbnail still come through, even when every player client is refused.
+        result = _run_extract(
+            ["--dump-json", "--no-playlist", "--ignore-no-formats-error", url]
+        )
         if result.returncode != 0:
-            return jsonify({"error": _tail(result.stderr)}), 500
+            return jsonify({"error": _error_message(result)}), 500
 
         data = json.loads(result.stdout)
         return jsonify(
@@ -244,7 +266,7 @@ def get_download_url():
     try:
         result = _run_extract(["-f", fmt, "--get-url", url])
         if result.returncode != 0:
-            return jsonify({"error": _tail(result.stderr)}), 500
+            return jsonify({"error": _error_message(result)}), 500
 
         urls = [line for line in result.stdout.strip().split("\n") if line]
         return jsonify(
@@ -271,7 +293,7 @@ def get_audio_url():
     try:
         result = _run_extract(["-f", "bestaudio", "--get-url", url])
         if result.returncode != 0:
-            return jsonify({"error": _tail(result.stderr)}), 500
+            return jsonify({"error": _error_message(result)}), 500
 
         return jsonify({"audio_url": result.stdout.strip()})
     except subprocess.TimeoutExpired:
@@ -292,7 +314,7 @@ def get_subtitles():
     try:
         result = _run_extract(["--list-subs", "--skip-download", url])
         if result.returncode != 0:
-            return jsonify({"error": _tail(result.stderr)}), 500
+            return jsonify({"error": _error_message(result)}), 500
         return jsonify({"output": result.stdout.strip()})
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Request timed out"}), 504

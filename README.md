@@ -5,6 +5,11 @@ URLs over HTTP — usable from the portfolio dashboard, n8n, Make, Zapier, or an
 
 ## What changed in this revision
 
+- **Wider client retry + metadata degradation (rev 5).** The retry chain now also tries
+  `tv_simply`, `mweb` and `ios`, and `/info` runs yt-dlp with `--ignore-no-formats-error`
+  so a bot-checked video still returns metadata (title/thumbnail) instead of a hard
+  failure. When every client is refused, endpoints answer with a short human explanation
+  instead of dumping the raw yt-dlp stderr.
 - **Deno is installed in the image.** YouTube now requires yt-dlp's EJS challenge solver,
   which needs Deno >= 2.3 on `PATH` (the Debian `nodejs` package is far too old). Without it,
   extractions fail with "Signature solving failed / Only images are available".
@@ -12,9 +17,9 @@ URLs over HTTP — usable from the portfolio dashboard, n8n, Make, Zapier, or an
   deploy is running and how fresh yt-dlp is.
 - **Bot-check retry across player clients.** When YouTube refuses the default client (403 /
   "Requested format is not available") or returns a storyboard-only result, the request is
-  retried with alternative player clients (`tv`, `android_vr`, `web_embedded`) before
-  failing — datacenter IPs get bot-checked intermittently, and a different client often
-  gets through.
+  retried with alternative player clients (`tv`, `android_vr`, `web_embedded`, `tv_simply`,
+  `mweb`, `ios`) before failing — datacenter IPs get bot-checked intermittently, and a
+  different client often gets through.
 - **Cookies are optional now.** The old build always passed `--cookies /app/cookies.txt`, but
   that file is not in the repo, so on Render every yt-dlp call failed. Cookies are only
   attached when a file actually exists (see `COOKIES_B64` below).
